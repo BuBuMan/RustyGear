@@ -10,9 +10,10 @@ struct Graphics {
     surface: wgpu::Surface,
     device: wgpu::Device,
     queue: wgpu::Queue,
-    sc_desc: wgpu::SwapChainDescriptor,
-    swap_chain: wgpu::SwapChain,
+    swapChainDescriptor: wgpu::SwapChainDescriptor,
+    swapChain: wgpu::SwapChain,
     size: (u32, u32),
+    pipeline: wgpu::RenderPipeline,
 }
 
 impl Graphics {
@@ -51,7 +52,7 @@ impl Graphics {
         ).await.unwrap();
         
         // Define and creating the swap_chain.
-        let sc_desc = wgpu::SwapChainDescriptor {
+        let swapChainDescriptor = wgpu::SwapChainDescriptor {
             // The usage field describes how the swap_chain's underlying textures will be used. 
             usage: wgpu::TextureUsage::RENDER_ATTACHMENT,
             // Defines how the swap_chains textures will be stored on the gpu
@@ -62,29 +63,78 @@ impl Graphics {
             present_mode: wgpu::PresentMode::Fifo,
         };
 
-        let swap_chain = device.create_swap_chain(&surface, &sc_desc);
+        let swapChain = device.create_swap_chain(&surface, &swapChainDescriptor);
+
+        // Load shders
+        let shader = device.create_shader_module(&wgpu::ShaderModuleDescriptor {
+            label: Some("Shader"),
+            flags: wgpu::ShaderFlags::all(),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+        });
+
+        let pipelineLayout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Render Pipeline Layout"),
+            bind_group_layouts: &[],
+            push_constant_ranges: &[],
+        });
+
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Render Pipeline"),
+            layout: Some(&pipelineLayout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "main",
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "main",
+                targets: &[wgpu::ColorTargetState {
+                    format: swapChainDescriptor.format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrite::ALL,
+                }],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back),
+                // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
+                polygon_mode: wgpu::PolygonMode::Fill,
+                clamp_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+        });
 
         Self {
             surface,
             device,
             queue,
-            sc_desc,
-            swap_chain,
-            size
+            swapChainDescriptor,
+            swapChain,
+            size,
+            pipeline
         }
     }
 
     // impl State
     fn Resize(&mut self, new_size: (u32, u32)) {
         self.size = new_size;
-        self.sc_desc.width = new_size.0;
-        self.sc_desc.height = new_size.1;
-        self.swap_chain = self.device.create_swap_chain(&self.surface, &self.sc_desc);
+        self.swapChainDescriptor.width = new_size.0;
+        self.swapChainDescriptor.height = new_size.1;
+        self.swapChain = self.device.create_swap_chain(&self.surface, &self.swapChainDescriptor);
     }
 
     fn Render(&mut self, gameState: &GameState) -> Result<(), wgpu::SwapChainError> {
         let frame = self
-            .swap_chain
+            .swapChain
             .get_current_frame()?
             .output;
 
@@ -92,7 +142,7 @@ impl Graphics {
             label: Some("Render Encoder"),
         });
 
-        let render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        let mut renderPass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Render Pass"),
             color_attachments: &[
                 wgpu::RenderPassColorAttachment {
@@ -107,7 +157,10 @@ impl Graphics {
             depth_stencil_attachment: None,
         });
 
-        drop(render_pass);
+        renderPass.set_pipeline(&self.pipeline); // 2.
+        renderPass.draw(0..3, 0..1); // 3.
+
+        drop(renderPass);
 
         // Finish the command buffer, and to submit it to the gpu's render queue.
         self.queue.submit(std::iter::once(encoder.finish()));

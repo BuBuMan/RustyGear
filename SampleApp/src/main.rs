@@ -5,15 +5,52 @@ use sdl2::keyboard::Keycode;
 use std::time::Instant;
 use std::collections::HashSet;
 use futures::executor::block_on;
+use wgpu::util::DeviceExt;
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct Vertex {
+    position: [f32; 3],
+    color: [f32; 3],
+}
+
+impl Vertex {
+    fn Desc<'a>() -> wgpu::VertexBufferLayout<'a> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::InputStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x3,
+                }
+            ]
+        }
+    }
+}
+
+const VERTICES: &[Vertex] = &[
+    Vertex { position: [0.0, 0.5, 0.0], color: [1.0, 0.0, 0.0] },
+    Vertex { position: [-0.5, -0.5, 0.0], color: [0.0, 1.0, 0.0] },
+    Vertex { position: [0.5, -0.5, 0.0], color: [0.0, 0.0, 1.0] },
+];
 
 struct Graphics {
     surface: wgpu::Surface,
     device: wgpu::Device,
     queue: wgpu::Queue,
-    swapChainDescriptor: wgpu::SwapChainDescriptor,
-    swapChain: wgpu::SwapChain,
+    swap_chain_descriptor: wgpu::SwapChainDescriptor,
+    swap_chain: wgpu::SwapChain,
     size: (u32, u32),
     pipeline: wgpu::RenderPipeline,
+    vertex_buffer: wgpu::Buffer,
+    num_vertices: u32,
 }
 
 impl Graphics {
@@ -52,7 +89,7 @@ impl Graphics {
         ).await.unwrap();
         
         // Define and creating the swap_chain.
-        let swapChainDescriptor = wgpu::SwapChainDescriptor {
+        let swap_chain_descriptor = wgpu::SwapChainDescriptor {
             // The usage field describes how the swap_chain's underlying textures will be used. 
             usage: wgpu::TextureUsage::RENDER_ATTACHMENT,
             // Defines how the swap_chains textures will be stored on the gpu
@@ -63,7 +100,7 @@ impl Graphics {
             present_mode: wgpu::PresentMode::Fifo,
         };
 
-        let swapChain = device.create_swap_chain(&surface, &swapChainDescriptor);
+        let swap_chain = device.create_swap_chain(&surface, &swap_chain_descriptor);
 
         // Load shders
         let shader = device.create_shader_module(&wgpu::ShaderModuleDescriptor {
@@ -72,25 +109,33 @@ impl Graphics {
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
         });
 
-        let pipelineLayout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Render Pipeline Layout"),
             bind_group_layouts: &[],
             push_constant_ranges: &[],
         });
 
+        let vertex_buffer = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Vertex Buffer"),
+                contents: bytemuck::cast_slice(VERTICES),
+                usage: wgpu::BufferUsage::VERTEX,
+            }
+        );
+
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Render Pipeline"),
-            layout: Some(&pipelineLayout),
+            layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: "main",
-                buffers: &[],
+                buffers: &[Vertex::Desc()],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: "main",
                 targets: &[wgpu::ColorTargetState {
-                    format: swapChainDescriptor.format,
+                    format: swap_chain_descriptor.format,
                     blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrite::ALL,
                 }],
@@ -113,28 +158,32 @@ impl Graphics {
             },
         });
 
+        let num_vertices = VERTICES.len() as u32;
+
         Self {
             surface,
             device,
             queue,
-            swapChainDescriptor,
-            swapChain,
+            swap_chain_descriptor,
+            swap_chain,
             size,
-            pipeline
+            pipeline,
+            vertex_buffer,
+            num_vertices
         }
     }
 
     // impl State
     fn Resize(&mut self, new_size: (u32, u32)) {
         self.size = new_size;
-        self.swapChainDescriptor.width = new_size.0;
-        self.swapChainDescriptor.height = new_size.1;
-        self.swapChain = self.device.create_swap_chain(&self.surface, &self.swapChainDescriptor);
+        self.swap_chain_descriptor.width = new_size.0;
+        self.swap_chain_descriptor.height = new_size.1;
+        self.swap_chain = self.device.create_swap_chain(&self.surface, &self.swap_chain_descriptor);
     }
 
     fn Render(&mut self, gameState: &GameState) -> Result<(), wgpu::SwapChainError> {
         let frame = self
-            .swapChain
+            .swap_chain
             .get_current_frame()?
             .output;
 
@@ -157,8 +206,9 @@ impl Graphics {
             depth_stencil_attachment: None,
         });
 
-        renderPass.set_pipeline(&self.pipeline); // 2.
-        renderPass.draw(0..3, 0..1); // 3.
+        renderPass.set_pipeline(&self.pipeline);
+        renderPass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        renderPass.draw(0..self.num_vertices, 0..1);
 
         drop(renderPass);
 
@@ -297,6 +347,7 @@ fn main() {
 
     // let mut canvas = window.into_canvas().build().unwrap();
     let mut eventPump = sdlContext.event_pump().unwrap();
+
     let graphics = block_on(Graphics::new(&window));
     let mut appState = AppState::new(Input::new(&eventPump), graphics, None);
     let mut gameState = GameState {

@@ -5,15 +5,66 @@ use sdl2::keyboard::Keycode;
 use std::time::Instant;
 use std::collections::HashSet;
 use futures::executor::block_on;
+use wgpu::util::DeviceExt;
+
+mod texture;
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct Vertex {
+    position: [f32; 3],
+    tex_coords: [f32; 2],
+}
+
+impl Vertex {
+    fn Desc<'a>() -> wgpu::VertexBufferLayout<'a> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::InputStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x2,
+                }
+            ]
+        }
+    }
+}
+
+// A--B
+// |  |
+// C--D
+const VERTICES: &[Vertex] = &[
+    Vertex { position: [-0.5, 0.5, 0.0], tex_coords: [0.0, 0.0] },  // A
+    Vertex { position: [0.5, 0.5, 0.0], tex_coords: [1.0, 0.0] },   // B
+    Vertex { position: [-0.5, -0.5, 0.0], tex_coords: [0.0, 1.0] }, // C
+    Vertex { position: [0.5, -0.5, 0.0], tex_coords: [1.0, 1.0] },  // D
+];
+
+// Must be 4 bytes aligned
+const INDICES: &[u16] = &[
+    2, 1, 0,
+    1, 2, 3,
+];
 
 struct Graphics {
     surface: wgpu::Surface,
     device: wgpu::Device,
     queue: wgpu::Queue,
-    swapChainDescriptor: wgpu::SwapChainDescriptor,
-    swapChain: wgpu::SwapChain,
+    swap_chain_descriptor: wgpu::SwapChainDescriptor,
+    swap_chain: wgpu::SwapChain,
     size: (u32, u32),
     pipeline: wgpu::RenderPipeline,
+    vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer, 
+    num_indices: u32,
+    diffuse_bind_group: wgpu::BindGroup,
 }
 
 impl Graphics {
@@ -52,7 +103,7 @@ impl Graphics {
         ).await.unwrap();
         
         // Define and creating the swap_chain.
-        let swapChainDescriptor = wgpu::SwapChainDescriptor {
+        let swap_chain_descriptor = wgpu::SwapChainDescriptor {
             // The usage field describes how the swap_chain's underlying textures will be used. 
             usage: wgpu::TextureUsage::RENDER_ATTACHMENT,
             // Defines how the swap_chains textures will be stored on the gpu
@@ -63,35 +114,98 @@ impl Graphics {
             present_mode: wgpu::PresentMode::Fifo,
         };
 
-        let swapChain = device.create_swap_chain(&surface, &swapChainDescriptor);
+        let swap_chain = device.create_swap_chain(&surface, &swap_chain_descriptor);
+
+        // Create texture
+        let diffuse_texture = texture::Texture::load_texture("src\\resources\\textures\\spaceship.png", &device, &queue).unwrap();
+
+        let texture_bind_group_layout = device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStage::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStage::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler {
+                            comparison: false,
+                            filtering: true,
+                        },
+                        count: None,
+                    },
+                ],
+                label: Some("texture_bind_group_layout"),
+            }
+        );
+
+        let diffuse_bind_group = device.create_bind_group(
+            &wgpu::BindGroupDescriptor {
+                layout: &texture_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&diffuse_texture.view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&diffuse_texture.sampler),
+                    }
+                ],
+                label: Some("diffuse_bind_group"),
+            }
+        );
 
         // Load shders
         let shader = device.create_shader_module(&wgpu::ShaderModuleDescriptor {
             label: Some("Shader"),
             flags: wgpu::ShaderFlags::all(),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("resources\\shaders\\shader.wgsl").into()),
         });
 
-        let pipelineLayout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Render Pipeline Layout"),
-            bind_group_layouts: &[],
+            bind_group_layouts: &[&texture_bind_group_layout],
             push_constant_ranges: &[],
         });
 
+        let vertex_buffer = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Vertex Buffer"),
+                contents: bytemuck::cast_slice(VERTICES),
+                usage: wgpu::BufferUsage::VERTEX,
+            }
+        );
+
+        let index_buffer = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Index Buffer"),
+                contents: bytemuck::cast_slice(INDICES),
+                usage: wgpu::BufferUsage::INDEX,
+            }
+        );
+
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Render Pipeline"),
-            layout: Some(&pipelineLayout),
+            layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: "main",
-                buffers: &[],
+                buffers: &[Vertex::Desc()],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: "main",
                 targets: &[wgpu::ColorTargetState {
-                    format: swapChainDescriptor.format,
-                    blend: Some(wgpu::BlendState::REPLACE),
+                    format: swap_chain_descriptor.format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING), // To select alpha
                     write_mask: wgpu::ColorWrite::ALL,
                 }],
             }),
@@ -113,28 +227,34 @@ impl Graphics {
             },
         });
 
+        let num_indices = INDICES.len() as u32;
+
         Self {
             surface,
             device,
             queue,
-            swapChainDescriptor,
-            swapChain,
+            swap_chain_descriptor,
+            swap_chain,
             size,
-            pipeline
+            pipeline,
+            vertex_buffer,
+            index_buffer,
+            num_indices,
+            diffuse_bind_group,
         }
     }
 
     // impl State
-    fn Resize(&mut self, new_size: (u32, u32)) {
+    fn resize(&mut self, new_size: (u32, u32)) {
         self.size = new_size;
-        self.swapChainDescriptor.width = new_size.0;
-        self.swapChainDescriptor.height = new_size.1;
-        self.swapChain = self.device.create_swap_chain(&self.surface, &self.swapChainDescriptor);
+        self.swap_chain_descriptor.width = new_size.0;
+        self.swap_chain_descriptor.height = new_size.1;
+        self.swap_chain = self.device.create_swap_chain(&self.surface, &self.swap_chain_descriptor);
     }
 
-    fn Render(&mut self, gameState: &GameState) -> Result<(), wgpu::SwapChainError> {
+    fn render(&mut self, game_state: &GameState) -> Result<(), wgpu::SwapChainError> {
         let frame = self
-            .swapChain
+            .swap_chain
             .get_current_frame()?
             .output;
 
@@ -142,14 +262,14 @@ impl Graphics {
             label: Some("Render Encoder"),
         });
 
-        let mut renderPass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Render Pass"),
             color_attachments: &[
                 wgpu::RenderPassColorAttachment {
                     view: &frame.view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(gameState.clearColor),
+                        load: wgpu::LoadOp::Clear(game_state.clear_color),
                         store: true,
                     }
                 }
@@ -157,10 +277,13 @@ impl Graphics {
             depth_stencil_attachment: None,
         });
 
-        renderPass.set_pipeline(&self.pipeline); // 2.
-        renderPass.draw(0..3, 0..1); // 3.
+        render_pass.set_pipeline(&self.pipeline);
+        render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
+        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
 
-        drop(renderPass);
+        drop(render_pass);
 
         // Finish the command buffer, and to submit it to the gpu's render queue.
         self.queue.submit(std::iter::once(encoder.finish()));
@@ -170,125 +293,125 @@ impl Graphics {
 }
 
 struct Input {
-    currentPressedKeys: HashSet<sdl2::keyboard::Scancode>,
-    previousPressedKeys: HashSet<sdl2::keyboard::Scancode>,
+    current_pressed_keys: HashSet<sdl2::keyboard::Scancode>,
+    previous_pressed_keys: HashSet<sdl2::keyboard::Scancode>,
 }
 
 impl Input {
     pub fn new(eventPump: &sdl2::EventPump) -> Self {
         Self {
-            currentPressedKeys: eventPump.keyboard_state().pressed_scancodes().collect(),
-            previousPressedKeys: eventPump.keyboard_state().pressed_scancodes().collect()
+            current_pressed_keys: eventPump.keyboard_state().pressed_scancodes().collect(),
+            previous_pressed_keys: eventPump.keyboard_state().pressed_scancodes().collect()
         }
     }
 
-    pub fn Update(&mut self, newKeyboardState: &sdl2::keyboard::KeyboardState) {
-        std::mem::swap(&mut self.currentPressedKeys, &mut self.previousPressedKeys);
-        self.currentPressedKeys = newKeyboardState.pressed_scancodes().collect();
+    pub fn update(&mut self, newKeyboardState: &sdl2::keyboard::KeyboardState) {
+        std::mem::swap(&mut self.current_pressed_keys, &mut self.previous_pressed_keys);
+        self.current_pressed_keys = newKeyboardState.pressed_scancodes().collect();
     }
 
-    pub fn IsKeyPressed(&self, key: sdl2::keyboard::Scancode) -> bool {
-        self.currentPressedKeys.contains(&key)
+    pub fn is_key_pressed(&self, key: sdl2::keyboard::Scancode) -> bool {
+        self.current_pressed_keys.contains(&key)
     }
 
-    pub fn IsKeyDown(&self, key: sdl2::keyboard::Scancode) -> bool {
-        self.currentPressedKeys.contains(&key) && !self.previousPressedKeys.contains(&key)
+    pub fn is_key_down(&self, key: sdl2::keyboard::Scancode) -> bool {
+        self.current_pressed_keys.contains(&key) && !self.previous_pressed_keys.contains(&key)
     }
 
-    pub fn IsKeyUp(&self, key: sdl2::keyboard::Scancode) -> bool {
-        !self.currentPressedKeys.contains(&key) && self.previousPressedKeys.contains(&key)
+    pub fn is_key_up(&self, key: sdl2::keyboard::Scancode) -> bool {
+        !self.current_pressed_keys.contains(&key) && self.previous_pressed_keys.contains(&key)
     }
 }
 
 struct AppState {
     input: Input,
     graphics: Graphics,
-    startOfFrame: Instant,
-    timeElapsed: f64,
-    deltaTime: f64,
-    targetFPS: u16,
-    exitApp: bool
+    start_of_frame: Instant,
+    time_elapsed: f64,
+    delta_time: f64,
+    target_fps: u16,
+    exit_app: bool
 }
 
 struct GameState {
-    clearColor: wgpu::Color
+    clear_color: wgpu::Color
 }
 
 impl AppState {
-    pub fn new(input: Input, graphics: Graphics, targerFPS: Option<u16>) -> AppState {
-        let fps = targerFPS.unwrap_or(60);
+    pub fn new(input: Input, graphics: Graphics, target_fps: Option<u16>) -> AppState {
+        let fps = target_fps.unwrap_or(60);
         AppState {
             input: input,
             graphics: graphics,
-            startOfFrame: Instant::now(),
-            timeElapsed: 0.0,
-            targetFPS: fps,
-            deltaTime: 1.0/(fps as f64),
-            exitApp: false
+            start_of_frame: Instant::now(),
+            time_elapsed: 0.0,
+            target_fps: fps,
+            delta_time: 1.0/(fps as f64),
+            exit_app: false
         }
     }
 
     pub fn TargetRefreshRate(&self) -> f64 {
-        1.0/(self.targetFPS as f64)
+        1.0/(self.target_fps as f64)
     }
 }
 
-fn UpdateGame(appState: &AppState, gameState: &mut GameState) {
-    if appState.input.IsKeyDown(sdl2::keyboard::Scancode::R) {
-        gameState.clearColor.r = 1.0;
-        gameState.clearColor.g = 0.0;
-        gameState.clearColor.b = 0.0;
+fn update_game(appState: &AppState, game_state: &mut GameState) {
+    if appState.input.is_key_down(sdl2::keyboard::Scancode::R) {
+        game_state.clear_color.r = 1.0;
+        game_state.clear_color.g = 0.0;
+        game_state.clear_color.b = 0.0;
     }
 
-    if appState.input.IsKeyDown(sdl2::keyboard::Scancode::G) {
-        gameState.clearColor.r = 0.0;
-        gameState.clearColor.g = 1.0;
-        gameState.clearColor.b = 0.0;
+    if appState.input.is_key_down(sdl2::keyboard::Scancode::G) {
+        game_state.clear_color.r = 0.0;
+        game_state.clear_color.g = 1.0;
+        game_state.clear_color.b = 0.0;
     }
 
-    if appState.input.IsKeyDown(sdl2::keyboard::Scancode::B) {
-        gameState.clearColor.r = 0.0;
-        gameState.clearColor.g = 0.0;
-        gameState.clearColor.b = 1.0;
+    if appState.input.is_key_down(sdl2::keyboard::Scancode::B) {
+        game_state.clear_color.r = 0.0;
+        game_state.clear_color.g = 0.0;
+        game_state.clear_color.b = 1.0;
     }
 }
 
-fn EnterFrame(eventPump: &mut sdl2::EventPump, appState: &mut AppState) {
-    appState.startOfFrame = Instant::now();
-    appState.input.Update(&eventPump.keyboard_state());
+fn enter_frame(event_pump: &mut sdl2::EventPump, app_state: &mut AppState) {
+    app_state.start_of_frame = Instant::now();
+    app_state.input.update(&event_pump.keyboard_state());
 
-    for event in eventPump.poll_iter() {
+    for event in event_pump.poll_iter() {
         match event {
             Event::Quit {..} |
             Event::KeyDown { keycode: Some(Keycode::Escape), .. } =>  {
-                appState.exitApp = true;
+                app_state.exit_app = true;
             },
             Event::Window { win_event : sdl2::event::WindowEvent::Resized(width, height), .. }=> {
-                appState.graphics.Resize((width as u32, height as u32));
+                app_state.graphics.resize((width as u32, height as u32));
             },
             _ => {}
         }
     }
 }
 
-fn ExitFrame(appState: &mut AppState) {
+fn exit_frame(app_state: &mut AppState) {
     'lockFPS: loop {
-        if appState.startOfFrame.elapsed().as_secs_f64() >= appState.TargetRefreshRate() {
+        if app_state.start_of_frame.elapsed().as_secs_f64() >= app_state.TargetRefreshRate() {
             break 'lockFPS;
         }
     }
 
-    appState.deltaTime = appState.startOfFrame.elapsed().as_secs_f64();
-    appState.timeElapsed += appState.deltaTime;
+    app_state.delta_time = app_state.start_of_frame.elapsed().as_secs_f64();
+    app_state.time_elapsed += app_state.delta_time;
 
     // println!("Application has been running for: {:?} seconds", appState.timeElapsed);
     // println!("Application FPS: {:?} ", 1.0/appState.deltaTime);
 }
 
 fn main() {
-    let sdlContext = sdl2::init().unwrap();
-    let videoSubsystem = sdlContext.video().unwrap();
-    let window = videoSubsystem
+    let sdl_context = sdl2::init().unwrap();
+    let video_subsystem = sdl_context.video().unwrap();
+    let window = video_subsystem
         .window("Sample", 800, 800)
         .position_centered()
         .resizable()
@@ -296,11 +419,12 @@ fn main() {
         .unwrap();
 
     // let mut canvas = window.into_canvas().build().unwrap();
-    let mut eventPump = sdlContext.event_pump().unwrap();
+    let mut event_pump = sdl_context.event_pump().unwrap();
+
     let graphics = block_on(Graphics::new(&window));
-    let mut appState = AppState::new(Input::new(&eventPump), graphics, None);
-    let mut gameState = GameState {
-        clearColor: wgpu::Color {
+    let mut app_state = AppState::new(Input::new(&event_pump), graphics, None);
+    let mut game_state = GameState {
+        clear_color: wgpu::Color {
             r: 0.1,
             g: 0.2,
             b: 0.3,
@@ -308,25 +432,25 @@ fn main() {
         }
     };
 
-    'gameloop: loop {
-        EnterFrame(&mut eventPump, &mut appState);
+    'game_loop: loop {
+        enter_frame(&mut event_pump, &mut app_state);
 
-        if appState.exitApp {
-            break 'gameloop;
+        if app_state.exit_app {
+            break 'game_loop;
         }
 
-        UpdateGame(&appState, &mut gameState);
+        update_game(&app_state, &mut game_state);
 
-        match appState.graphics.Render(&gameState) {
+        match app_state.graphics.render(&game_state) {
             Ok(_) => {}
             // Recreate the swap_chain if lost
-            Err(wgpu::SwapChainError::Lost) => appState.graphics.Resize(appState.graphics.size),
+            Err(wgpu::SwapChainError::Lost) => app_state.graphics.resize(app_state.graphics.size),
             // The system is out of memory, we should probably quit
-            Err(wgpu::SwapChainError::OutOfMemory) => appState.exitApp = true,
+            Err(wgpu::SwapChainError::OutOfMemory) => app_state.exit_app = true,
             // All other errors (Outdated, Timeout) should be resolved by the next frame
             Err(e) => eprintln!("{:?}", e),
         }
 
-        ExitFrame(&mut appState);
+        exit_frame(&mut app_state);
     }
 }

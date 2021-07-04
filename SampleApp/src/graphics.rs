@@ -49,6 +49,46 @@ const INDICES: &[u16] = &[
     1, 2, 3,
 ];
 
+#[repr(C)]
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct Uniforms {
+    // We can't use cgmath with bytemuck directly so we'll have
+    // to convert the Matrix4 into a 4x4 f32 array
+    view_proj: [[f32; 4]; 4],    
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct Instance {
+    model_mat: [[f32; 4]; 4],
+}
+
+impl Uniforms {
+    pub fn new() -> Self {
+        use cgmath::SquareMatrix;
+        Self {
+            view_proj: cgmath::Matrix4::identity().into(),
+        }
+    }
+
+    pub fn update_view_proj(&mut self, matrix4: cgmath::Matrix4<f32>) {
+        self.view_proj = matrix4.into();
+    }    
+}
+
+impl Instance {
+    pub fn new() -> Self {
+        use cgmath::SquareMatrix;
+        Self {
+            model_mat: cgmath::Matrix4::identity().into(),
+        }
+    }
+
+    pub fn update_model_mat(&mut self, matrix4: cgmath::Matrix4<f32>) {
+        self.model_mat = matrix4.into();
+    }
+}
+
 pub struct Graphics {
     pub surface: wgpu::Surface,
     pub device: wgpu::Device,
@@ -61,6 +101,12 @@ pub struct Graphics {
     pub index_buffer: wgpu::Buffer, 
     pub num_indices: u32,
     pub diffuse_bind_group: wgpu::BindGroup,
+    pub uniforms: Uniforms,
+    pub uniform_buffer: wgpu::Buffer,
+    pub uniform_bind_group: wgpu::BindGroup,
+    pub instance: Instance,
+    pub instance_buffer: wgpu::Buffer,
+    pub instance_bind_group: wgpu::BindGroup
 }
 
 impl Graphics {
@@ -108,6 +154,78 @@ impl Graphics {
         };
 
         let swap_chain = device.create_swap_chain(&surface, &swap_chain_descriptor);
+
+        let uniforms = Uniforms::new();
+        let uniform_buffer = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Uniform Buffer"),
+                contents: bytemuck::cast_slice(&[uniforms]),
+                usage: wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
+            }
+        );
+
+        let uniform_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStage::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }
+            ],
+            label: Some("uniform_bind_group_layout"),
+        });
+
+        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &uniform_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                }
+            ],
+            label: Some("uniform_bind_group"),
+        });
+
+        let instance = Instance::new();
+        let instance_buffer = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Instance Buffer"),
+                contents: bytemuck::cast_slice(&[instance]),
+                usage: wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
+            }
+        );
+
+        let instance_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStage::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }
+            ],
+            label: Some("instance_bind_group_layout"),
+        });
+
+        let instance_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &instance_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: instance_buffer.as_entire_binding(),
+                }
+            ],
+            label: Some("instance_bind_group"),
+        });
 
         // Create texture
         let diffuse_texture = Texture::load_texture("src\\resources\\textures\\spaceship.png", &device, &queue).unwrap();
@@ -161,7 +279,11 @@ impl Graphics {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Render Pipeline Layout"),
-            bind_group_layouts: &[&texture_bind_group_layout],
+            bind_group_layouts: &[
+                &texture_bind_group_layout, 
+                &uniform_bind_group_layout,
+                &instance_bind_group_layout,
+            ],
             push_constant_ranges: &[],
         });
 
@@ -226,6 +348,12 @@ impl Graphics {
             index_buffer,
             num_indices,
             diffuse_bind_group,
+            uniforms,
+            uniform_buffer,
+            uniform_bind_group,
+            instance,
+            instance_buffer,
+            instance_bind_group,
         }
     }
 

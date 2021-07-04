@@ -21,7 +21,6 @@ impl Input {
         self.current_pressed_keys = newKeyboardState.pressed_scancodes().collect();
     }
 
-    #[allow(dead_code)]
     pub fn is_key_pressed(&self, key: Scancode) -> bool {
         self.current_pressed_keys.contains(&key)
     }
@@ -30,7 +29,6 @@ impl Input {
         self.current_pressed_keys.contains(&key) && !self.previous_pressed_keys.contains(&key)
     }
 
-    #[allow(dead_code)]
     pub fn is_key_up(&self, key: Scancode) -> bool {
         !self.current_pressed_keys.contains(&key) && self.previous_pressed_keys.contains(&key)
     }

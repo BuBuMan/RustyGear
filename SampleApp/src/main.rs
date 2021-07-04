@@ -18,6 +18,12 @@ impl graphics::Graphics {
             .get_current_frame()?
             .output;
 
+        self.uniforms.update_view_proj(game_state.camera.build_view_projection_matrix());
+        self.instance.update_model_mat(game_state.ship.build_model_matrix());
+        // For optimization create a separate buffer and copy it's contents to the uniform buffer.
+        self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[self.uniforms]));
+        self.queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&[self.instance]));
+
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
         });
@@ -29,7 +35,7 @@ impl graphics::Graphics {
                     view: &frame.view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(game_state.clear_color),
+                        load: wgpu::LoadOp::Clear(game_state.camera.clear_color),
                         store: true,
                     }
                 }
@@ -39,6 +45,8 @@ impl graphics::Graphics {
 
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
+        render_pass.set_bind_group(1, &self.uniform_bind_group, &[]);
+        render_pass.set_bind_group(2, &self.instance_bind_group, &[]);
         render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
         render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
@@ -52,6 +60,57 @@ impl graphics::Graphics {
     }
 }
 
+// The coordinate system in Wgpu is based on DirectX, and Metal's coordinate systems. 
+// That means that in normalized device coordinates the x axis and y axis are in the range of -1.0 to +1.0, and the z axis is 0.0 to +1.0. 
+// The cgmath crate (as well as most game math crates) are built for OpenGL's coordinate system. 
+// This matrix will scale and translate our scene from OpenGL's coordinate sytem to WGPU's
+pub const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
+    1.0, 0.0, 0.0, 0.0,
+    0.0, 1.0, 0.0, 0.0,
+    0.0, 0.0, 0.5, 0.0,
+    0.0, 0.0, 0.5, 1.0,
+);
+
+struct Orthographic {
+    left: f32,
+    right: f32,
+    bottom: f32,
+    top: f32,
+}
+
+struct Perspective {
+    aspect : f32,
+    fovy: f32,
+}
+
+enum CameraProperties {
+    Ortho(Orthographic),
+    Persp(Perspective),
+}
+
+struct Camera {
+    eye: cgmath::Point3<f32>,
+    target: cgmath::Point3<f32>,
+    up: cgmath::Vector3<f32>,
+    properties: CameraProperties,
+    znear: f32,
+    zfar: f32,
+    clear_color: wgpu::Color,
+}
+
+impl Camera {
+    pub fn build_view_projection_matrix(&self) -> cgmath::Matrix4<f32> {
+        let projection = match &self.properties {
+            CameraProperties::Ortho(properties) => cgmath::ortho(properties.left, properties.right, properties.bottom, properties.top, self.znear, self.zfar),
+            CameraProperties::Persp(properties) => cgmath::perspective(cgmath::Deg(properties.fovy), properties.aspect, self.znear, self.zfar),
+        };
+
+        let view = cgmath::Matrix4::look_at_rh(self.eye, self.target, self.up);
+
+        OPENGL_TO_WGPU_MATRIX*projection*view
+    }
+}
+
 struct AppState {
     input: Input,
     graphics: Graphics,
@@ -59,11 +118,24 @@ struct AppState {
     time_elapsed: f64,
     delta_time: f64,
     target_fps: u16,
-    exit_app: bool
+    exit_app: bool,
+}
+
+struct Transform {
+    position: cgmath::Vector3<f32>,
+    scale: cgmath::Vector3<f32>,
+    rotation: cgmath::Quaternion<f32>,
+}
+
+impl Transform {
+    pub fn build_model_matrix(&self) -> cgmath::Matrix4<f32> {
+        cgmath::Matrix4::from_translation(self.position)*cgmath::Matrix4::from(self.rotation)*cgmath::Matrix4::from_nonuniform_scale(self.scale.x, self.scale.y, self.scale.z)
+    }
 }
 
 struct GameState {
-    clear_color: wgpu::Color
+    camera: Camera,
+    ship: Transform,
 }
 
 impl AppState {
@@ -86,22 +158,8 @@ impl AppState {
 }
 
 fn update_game(appState: &AppState, game_state: &mut GameState) {
-    if appState.input.is_key_down(sdl2::keyboard::Scancode::R) {
-        game_state.clear_color.r = 1.0;
-        game_state.clear_color.g = 0.0;
-        game_state.clear_color.b = 0.0;
-    }
-
-    if appState.input.is_key_down(sdl2::keyboard::Scancode::G) {
-        game_state.clear_color.r = 0.0;
-        game_state.clear_color.g = 1.0;
-        game_state.clear_color.b = 0.0;
-    }
-
-    if appState.input.is_key_down(sdl2::keyboard::Scancode::B) {
-        game_state.clear_color.r = 0.0;
-        game_state.clear_color.g = 0.0;
-        game_state.clear_color.b = 1.0;
+    if appState.input.is_key_pressed(sdl2::keyboard::Scancode::W) {
+        game_state.ship.position.x += 1.0;
     }
 }
 
@@ -141,7 +199,7 @@ fn main() {
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
     let window = video_subsystem
-        .window("Sample", 800, 800)
+        .window("Sample", 1280, 720)
         .position_centered()
         .resizable()
         .build()
@@ -153,12 +211,20 @@ fn main() {
     let graphics = block_on(Graphics::new(&window));
     let mut app_state = AppState::new(Input::new(&event_pump), graphics, None);
     let mut game_state = GameState {
-        clear_color: wgpu::Color {
-            r: 0.1,
-            g: 0.2,
-            b: 0.3,
-            a: 1.0
-        }
+        camera: Camera {
+            eye: cgmath::Point3 { x: 0.0, y: 0.0, z: 1.0},
+            target: cgmath::Point3 {x: 0.0, y: 0.0, z: 0.0},
+            up: cgmath::Vector3 {x: 0.0, y: 1.0, z: 0.0},
+            properties: CameraProperties::Ortho(Orthographic {left: -360.0, right: 360.0, top: 640.0, bottom: -640.0}),
+            znear: 0.1,
+            zfar: 10.0,
+            clear_color: wgpu::Color { r: 0.1, g: 0.2, b: 0.3, a: 1.0 },
+        },
+        ship: Transform {
+            position: cgmath::Vector3 { x: 0.0, y: 0.0, z: 0.0},
+            scale: cgmath::Vector3 {x: 36.0, y: 113.7, z: 1.0},
+            rotation: cgmath::Quaternion::new(0.0, 0.0, 0.0, 0.0),
+        },
     };
 
     'game_loop: loop {

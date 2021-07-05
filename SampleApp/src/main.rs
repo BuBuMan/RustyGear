@@ -3,6 +3,7 @@
 use std::time::Instant;
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
+use sdl2::keyboard::Scancode;
 use futures::executor::block_on;
 use std::fmt::Debug;
 use cgmath::prelude::*;
@@ -139,26 +140,47 @@ struct Transform {
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 struct Controller {
     acceleration_speed: f32,
+    rotation_speed: f32,
     velocity: cgmath::Vector3<f32>, 
 }
 
 impl Transform {
     pub fn build_model_matrix(&self) -> cgmath::Matrix4<f32> {
-        cgmath::Matrix4::from_translation(self.position)*cgmath::Matrix4::from(self.rotation)*cgmath::Matrix4::from_nonuniform_scale(self.scale.x, self.scale.y, self.scale.z)
+        cgmath::Matrix4::from_translation(self.position)*cgmath::Matrix4::from_nonuniform_scale(self.scale.x, self.scale.y, self.scale.z)*cgmath::Matrix4::from(self.rotation)
     }
 }
 
 impl Controller {
     fn Update(&mut self, transform: &mut Transform, appState: &AppState) {
-        let mut acc_dir = cgmath::Vector3::new(0.0, 0.0, 0.0);
-        if appState.input.is_key_pressed(sdl2::keyboard::Scancode::W) {
-            acc_dir.x = 1.0;
+        let mut acc_dir = transform.rotation*cgmath::Vector3{x: 1.0, y: 0.0, z: 0.0};
+        if appState.input.is_key_pressed(Scancode::W) {
+            acc_dir *= 1.0;
         }
-        else if appState.input.is_key_pressed(sdl2::keyboard::Scancode::S) {
-            acc_dir.x = -1.0;
+        else if appState.input.is_key_pressed(Scancode::S) {
+            acc_dir *= -1.0;
         }
+        else {
+            acc_dir *= 0.0;
+        }
+
+        cgmath::Deg(1.0);
+
+        let mut rotate_dir = 0.0;
+        if appState.input.is_key_pressed(Scancode::A) {
+            rotate_dir = 1.0;
+        }
+        else if appState.input.is_key_pressed(Scancode::D) {
+            rotate_dir = -1.0;
+        }
+
         self.velocity = self.acceleration_speed*(appState.delta_time as f32)*acc_dir + self.velocity*0.99;
         transform.position += self.velocity*(appState.delta_time as f32);
+        transform.rotation = transform.rotation*cgmath::Quaternion::from(
+            cgmath::Euler {
+                x: cgmath::Deg(0.0), 
+                y: cgmath::Deg(0.0), 
+                z: cgmath::Deg(self.rotation_speed*rotate_dir*appState.delta_time as f32),
+            });
     }
 }
 
@@ -244,6 +266,7 @@ fn main() {
         ship: serde_json::from_str(&resources.prefabs["spaceship.json"]).unwrap(),
         controller: Controller {
             acceleration_speed: 200.0,
+            rotation_speed: 90.0,
             velocity: cgmath::Vector3::new(0.0, 0.0, 0.0)
         }
     };

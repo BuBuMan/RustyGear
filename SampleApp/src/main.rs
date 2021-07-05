@@ -4,12 +4,16 @@ use std::time::Instant;
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use futures::executor::block_on;
+use std::fmt::Debug;
+use cgmath::prelude::*;
 
 mod graphics;
 mod input;
+mod resources;
 
 use graphics::Graphics;
 use input::Input;
+use resources::Resources;
 
 impl graphics::Graphics {
     fn render(&mut self, game_state: &GameState) -> Result<(), wgpu::SwapChainError> {
@@ -71,6 +75,7 @@ pub const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
     0.0, 0.0, 0.5, 1.0,
 );
 
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
 struct Orthographic {
     left: f32,
     right: f32,
@@ -78,16 +83,19 @@ struct Orthographic {
     top: f32,
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
 struct Perspective {
     aspect : f32,
     fovy: f32,
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
 enum CameraProperties {
     Ortho(Orthographic),
     Persp(Perspective),
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
 struct Camera {
     eye: cgmath::Point3<f32>,
     target: cgmath::Point3<f32>,
@@ -121,10 +129,17 @@ struct AppState {
     exit_app: bool,
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
 struct Transform {
     position: cgmath::Vector3<f32>,
     scale: cgmath::Vector3<f32>,
     rotation: cgmath::Quaternion<f32>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+struct Controller {
+    acceleration_speed: f32,
+    velocity: cgmath::Vector3<f32>, 
 }
 
 impl Transform {
@@ -133,9 +148,24 @@ impl Transform {
     }
 }
 
+impl Controller {
+    fn Update(&mut self, transform: &mut Transform, appState: &AppState) {
+        let mut acc_dir = cgmath::Vector3::new(0.0, 0.0, 0.0);
+        if appState.input.is_key_pressed(sdl2::keyboard::Scancode::W) {
+            acc_dir.x = 1.0;
+        }
+        else if appState.input.is_key_pressed(sdl2::keyboard::Scancode::S) {
+            acc_dir.x = -1.0;
+        }
+        self.velocity = self.acceleration_speed*(appState.delta_time as f32)*acc_dir + self.velocity*0.99;
+        transform.position += self.velocity*(appState.delta_time as f32);
+    }
+}
+
 struct GameState {
     camera: Camera,
     ship: Transform,
+    controller: Controller
 }
 
 impl AppState {
@@ -157,10 +187,8 @@ impl AppState {
     }
 }
 
-fn update_game(appState: &AppState, game_state: &mut GameState) {
-    if appState.input.is_key_pressed(sdl2::keyboard::Scancode::W) {
-        game_state.ship.position.x += 1.0;
-    }
+fn update_game(app_state: &AppState, game_state: &mut GameState) {
+    game_state.controller.Update(&mut game_state.ship, app_state);
 }
 
 fn enter_frame(event_pump: &mut sdl2::EventPump, app_state: &mut AppState) {
@@ -196,6 +224,7 @@ fn exit_frame(app_state: &mut AppState) {
 }
 
 fn main() {
+    let resources = Resources::new();
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
     let window = video_subsystem
@@ -211,20 +240,12 @@ fn main() {
     let graphics = block_on(Graphics::new(&window));
     let mut app_state = AppState::new(Input::new(&event_pump), graphics, None);
     let mut game_state = GameState {
-        camera: Camera {
-            eye: cgmath::Point3 { x: 0.0, y: 0.0, z: 1.0},
-            target: cgmath::Point3 {x: 0.0, y: 0.0, z: 0.0},
-            up: cgmath::Vector3 {x: 0.0, y: 1.0, z: 0.0},
-            properties: CameraProperties::Ortho(Orthographic {left: -360.0, right: 360.0, top: 640.0, bottom: -640.0}),
-            znear: 0.1,
-            zfar: 10.0,
-            clear_color: wgpu::Color { r: 0.1, g: 0.2, b: 0.3, a: 1.0 },
-        },
-        ship: Transform {
-            position: cgmath::Vector3 { x: 0.0, y: 0.0, z: 0.0},
-            scale: cgmath::Vector3 {x: 36.0, y: 113.7, z: 1.0},
-            rotation: cgmath::Quaternion::new(0.0, 0.0, 0.0, 0.0),
-        },
+        camera: serde_json::from_str(&resources.prefabs["ortho_camera.json"]).unwrap(),
+        ship: serde_json::from_str(&resources.prefabs["spaceship.json"]).unwrap(),
+        controller: Controller {
+            acceleration_speed: 200.0,
+            velocity: cgmath::Vector3::new(0.0, 0.0, 0.0)
+        }
     };
 
     'game_loop: loop {

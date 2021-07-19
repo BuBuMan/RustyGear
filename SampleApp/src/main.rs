@@ -5,119 +5,138 @@ use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::keyboard::Scancode;
 use futures::executor::block_on;
-use std::fmt::Debug;
-use cgmath::prelude::*;
 
 mod graphics;
 mod input;
 mod resources;
+mod component;
+mod ecs;
+mod entity;
+mod texture;
 
+#[path= "components\\transform.rs"]
+mod transform;
+#[path= "components\\controller.rs"]
+mod controller;
+#[path= "components\\camera.rs"]
+mod camera;
+
+use crate::transform::Transform;
+use crate::controller::Controller;
+use crate::camera::Camera;
 use graphics::Graphics;
 use input::Input;
 use resources::Resources;
+use ecs::*;
 
-impl graphics::Graphics {
-    fn render(&mut self, game_state: &GameState) -> Result<(), wgpu::SwapChainError> {
-        let frame = self
-            .swap_chain
-            .get_current_frame()?
-            .output;
-
-        self.uniforms.update_view_proj(game_state.camera.build_view_projection_matrix());
-        self.instance.update_model_mat(game_state.ship.build_model_matrix());
-        // For optimization create a separate buffer and copy it's contents to the uniform buffer.
-        self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[self.uniforms]));
-        self.queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&[self.instance]));
-
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Render Encoder"),
-        });
-
-        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Render Pass"),
-            color_attachments: &[
-                wgpu::RenderPassColorAttachment {
-                    view: &frame.view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(game_state.camera.clear_color),
-                        store: true,
-                    }
+fn control_system(input: &Input, delta_time: f32, ecs: &EntityComponentSystem) {
+    let mut transforms = ecs.get_component_set::<Transform>().unwrap().borrow_mut();
+    let mut controllers = ecs.get_component_set::<Controller>().unwrap().borrow_mut();
+    
+    for entity in ecs.active_entities() {
+        match (transforms.get_mut(&entity), controllers.get_mut(&entity)) {
+            (Some(transform), Some(controller)) => {
+                let mut acc_dir = transform.rotation*cgmath::Vector3{x: 1.0, y: 0.0, z: 0.0};
+                if input.is_key_pressed(Scancode::W) {
+                    acc_dir *= 1.0;
                 }
-            ],
-            depth_stencil_attachment: None,
-        });
+                else if input.is_key_pressed(Scancode::S) {
+                    acc_dir *= -1.0;
+                }
+                else {
+                    acc_dir *= 0.0;
+                }
 
-        render_pass.set_pipeline(&self.pipeline);
-        render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
-        render_pass.set_bind_group(1, &self.uniform_bind_group, &[]);
-        render_pass.set_bind_group(2, &self.instance_bind_group, &[]);
-        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-        render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
+                cgmath::Deg(1.0);
 
-        drop(render_pass);
+                let mut rotate_dir = 0.0;
+                if input.is_key_pressed(Scancode::A) {
+                    rotate_dir = 1.0;
+                }
+                else if input.is_key_pressed(Scancode::D) {
+                    rotate_dir = -1.0;
+                }
 
-        // Finish the command buffer, and to submit it to the gpu's render queue.
-        self.queue.submit(std::iter::once(encoder.finish()));
-
-        Ok(())
+                controller.velocity = controller.acceleration_speed*delta_time*acc_dir + controller.velocity*0.99;
+                transform.position += controller.velocity*delta_time;
+                transform.rotation = transform.rotation*cgmath::Quaternion::from(
+                    cgmath::Euler {
+                        x: cgmath::Deg(0.0), 
+                        y: cgmath::Deg(0.0), 
+                        z: cgmath::Deg(controller.rotation_speed*rotate_dir*delta_time),
+                    });
+                    }
+            _ => {}
+        }
     }
 }
 
-// The coordinate system in Wgpu is based on DirectX, and Metal's coordinate systems. 
-// That means that in normalized device coordinates the x axis and y axis are in the range of -1.0 to +1.0, and the z axis is 0.0 to +1.0. 
-// The cgmath crate (as well as most game math crates) are built for OpenGL's coordinate system. 
-// This matrix will scale and translate our scene from OpenGL's coordinate sytem to WGPU's
-pub const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
-    1.0, 0.0, 0.0, 0.0,
-    0.0, 1.0, 0.0, 0.0,
-    0.0, 0.0, 0.5, 0.0,
-    0.0, 0.0, 0.5, 1.0,
-);
+fn render_system(graphics: &mut Graphics, ecs: &EntityComponentSystem) -> Result<(), wgpu::SwapChainError> {    
+    let frame = graphics
+        .swap_chain
+        .get_current_frame()?
+        .output;
 
-#[derive(serde::Serialize, serde::Deserialize, Debug)]
-struct Orthographic {
-    left: f32,
-    right: f32,
-    bottom: f32,
-    top: f32,
-}
+    for camera_entity in ecs.cameras() {
+        let camera_components = ecs.get_component_set::<Camera>().unwrap().borrow();
+        let camera_component = camera_components.get(camera_entity);
 
-#[derive(serde::Serialize, serde::Deserialize, Debug)]
-struct Perspective {
-    aspect : f32,
-    fovy: f32,
-}
+        match camera_component {
+            Some(camera) => {
+                graphics.uniforms.update_view_proj(camera.build_view_projection_matrix());
+                graphics.queue.write_buffer(&graphics.uniform_buffer, 0, bytemuck::cast_slice(&[graphics.uniforms]));
 
-#[derive(serde::Serialize, serde::Deserialize, Debug)]
-enum CameraProperties {
-    Ortho(Orthographic),
-    Persp(Perspective),
-}
+                let mut encoder = graphics.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Render Encoder"),
+                });
+            
+                let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Render Pass"),
+                    color_attachments: &[
+                        wgpu::RenderPassColorAttachment {
+                            view: &frame.view,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(camera.clear_color),
+                                store: true,
+                            }
+                        }
+                    ],
+                    depth_stencil_attachment: None,
+                });
 
-#[derive(serde::Serialize, serde::Deserialize, Debug)]
-struct Camera {
-    eye: cgmath::Point3<f32>,
-    target: cgmath::Point3<f32>,
-    up: cgmath::Vector3<f32>,
-    properties: CameraProperties,
-    znear: f32,
-    zfar: f32,
-    clear_color: wgpu::Color,
-}
+                render_pass.set_pipeline(&graphics.pipeline);
+                render_pass.set_bind_group(0, &graphics.diffuse_bind_group, &[]);
+                render_pass.set_bind_group(1, &graphics.uniform_bind_group, &[]);
+                render_pass.set_bind_group(2, &graphics.instance_bind_group, &[]);
+                render_pass.set_vertex_buffer(0, graphics.vertex_buffer.slice(..));
+                render_pass.set_index_buffer(graphics.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
 
-impl Camera {
-    pub fn build_view_projection_matrix(&self) -> cgmath::Matrix4<f32> {
-        let projection = match &self.properties {
-            CameraProperties::Ortho(properties) => cgmath::ortho(properties.left, properties.right, properties.bottom, properties.top, self.znear, self.zfar),
-            CameraProperties::Persp(properties) => cgmath::perspective(cgmath::Deg(properties.fovy), properties.aspect, self.znear, self.zfar),
-        };
+                let transform_components = ecs.get_component_set::<Transform>().unwrap().borrow();
+                let active_entities = ecs.active_entities();
 
-        let view = cgmath::Matrix4::look_at_rh(self.eye, self.target, self.up);
-
-        OPENGL_TO_WGPU_MATRIX*projection*view
+                for entity in active_entities {
+                    let transform_component = transform_components.get(entity);
+                    match transform_component {
+                        Some(transform) => {
+                            graphics.instance.update_model_mat(transform.build_model_matrix());
+                            graphics.queue.write_buffer(&graphics.instance_buffer, 0, bytemuck::cast_slice(&[graphics.instance]));
+                            render_pass.draw_indexed(0..graphics.num_indices, 0, 0..1);
+                        }
+                        None => {}
+                    };
+                }
+            
+                drop(render_pass);
+            
+                // Finish the command buffer, and to submit it to the gpu's render queue.
+                graphics.queue.submit(std::iter::once(encoder.finish()));
+            }
+            None => {}
+        }
     }
+
+    Ok(())
 }
 
 struct AppState {
@@ -128,66 +147,6 @@ struct AppState {
     delta_time: f64,
     target_fps: u16,
     exit_app: bool,
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Debug)]
-struct Transform {
-    position: cgmath::Vector3<f32>,
-    scale: cgmath::Vector3<f32>,
-    rotation: cgmath::Quaternion<f32>,
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Debug)]
-struct Controller {
-    acceleration_speed: f32,
-    rotation_speed: f32,
-    velocity: cgmath::Vector3<f32>, 
-}
-
-impl Transform {
-    pub fn build_model_matrix(&self) -> cgmath::Matrix4<f32> {
-        cgmath::Matrix4::from_translation(self.position)*cgmath::Matrix4::from_nonuniform_scale(self.scale.x, self.scale.y, self.scale.z)*cgmath::Matrix4::from(self.rotation)
-    }
-}
-
-impl Controller {
-    fn Update(&mut self, transform: &mut Transform, appState: &AppState) {
-        let mut acc_dir = transform.rotation*cgmath::Vector3{x: 1.0, y: 0.0, z: 0.0};
-        if appState.input.is_key_pressed(Scancode::W) {
-            acc_dir *= 1.0;
-        }
-        else if appState.input.is_key_pressed(Scancode::S) {
-            acc_dir *= -1.0;
-        }
-        else {
-            acc_dir *= 0.0;
-        }
-
-        cgmath::Deg(1.0);
-
-        let mut rotate_dir = 0.0;
-        if appState.input.is_key_pressed(Scancode::A) {
-            rotate_dir = 1.0;
-        }
-        else if appState.input.is_key_pressed(Scancode::D) {
-            rotate_dir = -1.0;
-        }
-
-        self.velocity = self.acceleration_speed*(appState.delta_time as f32)*acc_dir + self.velocity*0.99;
-        transform.position += self.velocity*(appState.delta_time as f32);
-        transform.rotation = transform.rotation*cgmath::Quaternion::from(
-            cgmath::Euler {
-                x: cgmath::Deg(0.0), 
-                y: cgmath::Deg(0.0), 
-                z: cgmath::Deg(self.rotation_speed*rotate_dir*appState.delta_time as f32),
-            });
-    }
-}
-
-struct GameState {
-    camera: Camera,
-    ship: Transform,
-    controller: Controller
 }
 
 impl AppState {
@@ -207,10 +166,6 @@ impl AppState {
     pub fn TargetRefreshRate(&self) -> f64 {
         1.0/(self.target_fps as f64)
     }
-}
-
-fn update_game(app_state: &AppState, game_state: &mut GameState) {
-    game_state.controller.Update(&mut game_state.ship, app_state);
 }
 
 fn enter_frame(event_pump: &mut sdl2::EventPump, app_state: &mut AppState) {
@@ -256,20 +211,19 @@ fn main() {
         .build()
         .unwrap();
 
-    // let mut canvas = window.into_canvas().build().unwrap();
     let mut event_pump = sdl_context.event_pump().unwrap();
 
     let graphics = block_on(Graphics::new(&window));
     let mut app_state = AppState::new(Input::new(&event_pump), graphics, None);
-    let mut game_state = GameState {
-        camera: serde_json::from_str(&resources.prefabs["ortho_camera.json"]).unwrap(),
-        ship: serde_json::from_str(&resources.prefabs["spaceship.json"]).unwrap(),
-        controller: Controller {
-            acceleration_speed: 200.0,
-            rotation_speed: 90.0,
-            velocity: cgmath::Vector3::new(0.0, 0.0, 0.0)
-        }
-    };
+    
+    let mut ecs = EntityComponentSystem::new(10_000);
+    ecs.create_entity(serde_json::from_str(&resources.prefabs["spaceship.json"]).unwrap(), None, Some(Controller {
+        acceleration_speed: 200.0,
+        rotation_speed: 90.0,
+        velocity: cgmath::Vector3::new(0.0, 0.0, 0.0)
+    }));
+
+    ecs.create_entity(None, serde_json::from_str(&resources.prefabs["ortho_camera.json"]).unwrap(), None);
 
     'game_loop: loop {
         enter_frame(&mut event_pump, &mut app_state);
@@ -278,9 +232,11 @@ fn main() {
             break 'game_loop;
         }
 
-        update_game(&app_state, &mut game_state);
+        // update_game(&app_state, &mut game_state);
 
-        match app_state.graphics.render(&game_state) {
+        control_system(&app_state.input, app_state.delta_time as f32, &ecs);
+
+        match render_system(&mut app_state.graphics, &ecs) {
             Ok(_) => {}
             // Recreate the swap_chain if lost
             Err(wgpu::SwapChainError::Lost) => app_state.graphics.resize(app_state.graphics.size),

@@ -1,9 +1,6 @@
 use wgpu::util::DeviceExt;
 
-#[path = "texture.rs"]
-pub mod texture;
-
-use texture::Texture;
+use crate::texture::Texture;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]

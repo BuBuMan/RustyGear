@@ -12,7 +12,7 @@ pub struct EntityComponentSystem {
     entity_allocator: EntityAllocator,
 
     components: AnyMap,
-    cameras: Vec<EntityId>,
+    cameras: HashSet<EntityId>,
 }
 
 impl EntityComponentSystem {
@@ -20,14 +20,14 @@ impl EntityComponentSystem {
         let entity_allocator = EntityAllocator::new(max_entities);
 
         let mut components = AnyMap::new();
-        components.insert(RefCell::new(ComponentSet::<Transform>::new(entity_allocator.max_size)));
-        components.insert(RefCell::new(ComponentSet::<Controller>::new(entity_allocator.max_size)));
-        components.insert(RefCell::new(ComponentSet::<Camera>::new(entity_allocator.max_size)));
+        components.insert(RefCell::new(ComponentSet::<Transform>::new(max_entities)));
+        components.insert(RefCell::new(ComponentSet::<Controller>::new(max_entities)));
+        components.insert(RefCell::new(ComponentSet::<Camera>::new(max_entities)));
 
         Self {
             entity_allocator,
             components,
-            cameras: Vec::new(),
+            cameras: HashSet::new(),
         }
     }
 
@@ -39,7 +39,7 @@ impl EntityComponentSystem {
         let entity = self.entity_allocator.allocate();
 
         if !camera.is_none() {
-            self.cameras.push(entity);
+            self.cameras.insert(entity);
         }
 
         self.add_component(&entity, transform);
@@ -51,7 +51,7 @@ impl EntityComponentSystem {
         &self.entity_allocator.active_entities
     }
 
-    pub fn cameras(&self) -> &Vec<EntityId> {
+    pub fn cameras(&self) -> &HashSet<EntityId> {
         &self.cameras
     }
 

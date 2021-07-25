@@ -35,16 +35,37 @@ impl EntityComponentSystem {
         self.components.get::<RefCell<ComponentSet<T>>>()
     }
 
-    pub fn create_entity(&mut self, transform: Option<Transform>, camera: Option<Camera>, controller: Option<Controller>) {
-        let entity = self.entity_allocator.allocate();
+    pub fn create_entity(&mut self, json: &serde_json::Value) {
+        match json {
+            serde_json::Value::Object(object) => {
+                let entity = self.entity_allocator.allocate();
 
-        if !camera.is_none() {
-            self.cameras.insert(entity);
+                for key in object.keys() {
+                    match key.as_ref() {
+                        "Transform" => {
+                            let component : Transform = serde_json::from_str(&object["Transform"].to_string()).unwrap();
+                            self.add_component(&entity, component);
+                        }
+                        "Camera" => {
+                            let component : Camera = serde_json::from_str(&object["Camera"].to_string()).unwrap();
+                            self.add_component(&entity, component);
+                        }
+                        "Controller" => {
+                            let component : Controller = serde_json::from_str(&object["Controller"].to_string()).unwrap();
+                            self.add_component(&entity, component);
+                        }
+                        _ => {}
+                    };
+                }
+
+                if self.has_component::<Camera>(&entity) {
+                    self.cameras.insert(entity);
+                }
+            }
+            _ => { 
+                panic!("Failed to create an entity from json file. Expected a json object."); 
+            }
         }
-
-        self.add_component(&entity, transform);
-        self.add_component(&entity, camera);
-        self.add_component(&entity, controller);
     }
 
     pub fn active_entities(&self) -> &HashSet<EntityId> {
@@ -55,10 +76,14 @@ impl EntityComponentSystem {
         &self.cameras
     }
 
-    fn add_component<T: 'static>(&self, entityId: &EntityId, component: Option<T>) {
-        match component {
-            Some(value) => self.get_component_set::<T>().unwrap().borrow_mut().set(&entityId, value),
-            _ => {}
-        };
+    fn add_component<T: 'static>(&self, entityId: &EntityId, component: T) {
+        self.get_component_set::<T>().unwrap().borrow_mut().set(&entityId, component)
+    }
+
+    fn has_component<T: 'static>(&self, entity: &EntityId) -> bool {
+        match self.get_component_set::<T>() {
+            Some(set) => !set.borrow().get(&entity).is_none(),
+            None => false
+        }
     }
 }

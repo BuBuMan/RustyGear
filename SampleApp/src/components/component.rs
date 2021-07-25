@@ -46,7 +46,7 @@ impl<T> ComponentSet<T> {
 
         match &mut self.entries[gen_index.index] {
             None => None,
-            Some(entry) => if entry.generation !=  gen_index.generation { None } else { Some(&mut entry.value) }
+            Some(entry) => if entry.generation != gen_index.generation { None } else { Some(&mut entry.value) }
         }
     }
 }

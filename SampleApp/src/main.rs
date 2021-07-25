@@ -3,17 +3,17 @@
 use std::time::Instant;
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
-use sdl2::keyboard::Scancode;
 use futures::executor::block_on;
 
 mod graphics;
 mod input;
 mod resources;
-mod component;
 mod ecs;
-mod entity;
 mod texture;
+mod entity;
 
+#[path= "components\\component.rs"]
+mod component;
 #[path= "components\\transform.rs"]
 mod transform;
 #[path= "components\\controller.rs"]
@@ -21,123 +21,17 @@ mod controller;
 #[path= "components\\camera.rs"]
 mod camera;
 
-use crate::transform::Transform;
-use crate::controller::Controller;
-use crate::camera::Camera;
+#[path= "systems\\render.rs"]
+mod render;
+#[path= "systems\\control.rs"]
+mod control;
+
+use render::render_system;
+use control::control_system;
 use graphics::Graphics;
 use input::Input;
 use resources::Resources;
 use ecs::*;
-
-fn control_system(input: &Input, delta_time: f32, ecs: &EntityComponentSystem) {
-    let mut transforms = ecs.get_component_set::<Transform>().unwrap().borrow_mut();
-    let mut controllers = ecs.get_component_set::<Controller>().unwrap().borrow_mut();
-    
-    for entity in ecs.active_entities() {
-        match (transforms.get_mut(&entity), controllers.get_mut(&entity)) {
-            (Some(transform), Some(controller)) => {
-                let mut acc_dir = transform.rotation*cgmath::Vector3{x: 1.0, y: 0.0, z: 0.0};
-                if input.is_key_pressed(Scancode::W) {
-                    acc_dir *= 1.0;
-                }
-                else if input.is_key_pressed(Scancode::S) {
-                    acc_dir *= -1.0;
-                }
-                else {
-                    acc_dir *= 0.0;
-                }
-
-                cgmath::Deg(1.0);
-
-                let mut rotate_dir = 0.0;
-                if input.is_key_pressed(Scancode::A) {
-                    rotate_dir = 1.0;
-                }
-                else if input.is_key_pressed(Scancode::D) {
-                    rotate_dir = -1.0;
-                }
-
-                controller.velocity = controller.acceleration_speed*delta_time*acc_dir + controller.velocity*0.99;
-                transform.position += controller.velocity*delta_time;
-                transform.rotation = transform.rotation*cgmath::Quaternion::from(
-                    cgmath::Euler {
-                        x: cgmath::Deg(0.0), 
-                        y: cgmath::Deg(0.0), 
-                        z: cgmath::Deg(controller.rotation_speed*rotate_dir*delta_time),
-                    });
-                    }
-            _ => {}
-        }
-    }
-}
-
-fn render_system(graphics: &mut Graphics, ecs: &EntityComponentSystem) -> Result<(), wgpu::SwapChainError> {    
-    let frame = graphics
-        .swap_chain
-        .get_current_frame()?
-        .output;
-
-    for camera_entity in ecs.cameras() {
-        let camera_components = ecs.get_component_set::<Camera>().unwrap().borrow();
-        let camera_component = camera_components.get(camera_entity);
-
-        match camera_component {
-            Some(camera) => {
-                graphics.uniforms.update_view_proj(camera.build_view_projection_matrix());
-                graphics.queue.write_buffer(&graphics.uniform_buffer, 0, bytemuck::cast_slice(&[graphics.uniforms]));
-
-                let mut encoder = graphics.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Render Encoder"),
-                });
-            
-                let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("Render Pass"),
-                    color_attachments: &[
-                        wgpu::RenderPassColorAttachment {
-                            view: &frame.view,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(camera.clear_color),
-                                store: true,
-                            }
-                        }
-                    ],
-                    depth_stencil_attachment: None,
-                });
-
-                render_pass.set_pipeline(&graphics.pipeline);
-                render_pass.set_bind_group(0, &graphics.diffuse_bind_group, &[]);
-                render_pass.set_bind_group(1, &graphics.uniform_bind_group, &[]);
-                render_pass.set_bind_group(2, &graphics.instance_bind_group, &[]);
-                render_pass.set_vertex_buffer(0, graphics.vertex_buffer.slice(..));
-                render_pass.set_index_buffer(graphics.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-
-                let transform_components = ecs.get_component_set::<Transform>().unwrap().borrow();
-                let active_entities = ecs.active_entities();
-
-                for entity in active_entities {
-                    let transform_component = transform_components.get(entity);
-                    match transform_component {
-                        Some(transform) => {
-                            graphics.instance.update_model_mat(transform.build_model_matrix());
-                            graphics.queue.write_buffer(&graphics.instance_buffer, 0, bytemuck::cast_slice(&[graphics.instance]));
-                            render_pass.draw_indexed(0..graphics.num_indices, 0, 0..1);
-                        }
-                        None => {}
-                    };
-                }
-            
-                drop(render_pass);
-            
-                // Finish the command buffer, and to submit it to the gpu's render queue.
-                graphics.queue.submit(std::iter::once(encoder.finish()));
-            }
-            None => {}
-        }
-    }
-
-    Ok(())
-}
 
 struct AppState {
     input: Input,
@@ -217,13 +111,8 @@ fn main() {
     let mut app_state = AppState::new(Input::new(&event_pump), graphics, None);
     
     let mut ecs = EntityComponentSystem::new(10_000);
-    ecs.create_entity(serde_json::from_str(&resources.prefabs["spaceship.json"]).unwrap(), None, Some(Controller {
-        acceleration_speed: 200.0,
-        rotation_speed: 90.0,
-        velocity: cgmath::Vector3::new(0.0, 0.0, 0.0)
-    }));
-
-    ecs.create_entity(None, serde_json::from_str(&resources.prefabs["ortho_camera.json"]).unwrap(), None);
+    ecs.create_entity(&resources.prefabs["spaceship.json"]);
+    ecs.create_entity(&resources.prefabs["ortho_camera.json"]);
 
     'game_loop: loop {
         enter_frame(&mut event_pump, &mut app_state);

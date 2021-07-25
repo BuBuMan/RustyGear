@@ -78,6 +78,7 @@ impl EntityAllocator {
     }
 }
 
+#[cfg(test)]
 mod tests {
     use super::EntityAllocator;
     use super::EntityId;

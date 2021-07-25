@@ -1,20 +1,31 @@
 {
-	"position": {
-		"x": 0.0,
-		"y": 0.0,
-		"z": 0.0
-	},
-	"scale": {
-		"x": 36.0,
-		"y": 113.7,
-		"z": 2.0
-	},
-	"rotation": {
-		"v": {
+	"Transform": {
+		"position": {
 			"x": 0.0,
 			"y": 0.0,
 			"z": 0.0
 		},
-		"s": 1.0
+		"scale": {
+			"x": 36.0,
+			"y": 113.7,
+			"z": 2.0
+		},
+		"rotation": {
+			"v": {
+				"x": 0.0,
+				"y": 0.0,
+				"z": 0.0
+			},
+			"s": 1.0
+		}
+	},
+	"Controller": {
+		"acceleration_speed": 200,
+    	"rotation_speed": 90,
+    	"velocity": {
+			"x": 0.0,
+			"y": 0.0,
+			"z": 0.0
+    	}
 	}
 }

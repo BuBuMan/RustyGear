@@ -95,6 +95,7 @@ fn exit_frame(app_state: &mut AppState) {
 }
 
 fn main() {
+    env_logger::init();
     let resources = Resources::new();
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();

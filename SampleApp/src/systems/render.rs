@@ -3,7 +3,7 @@ use crate::ecs::EntityComponentSystem;
 use crate::transform::Transform;
 use crate::camera::Camera;
 
-pub fn render_system(graphics: &mut Graphics, ecs: &EntityComponentSystem) -> Result<(), wgpu::SwapChainError> {    
+pub fn render_system(graphics: &mut Graphics, ecs: &EntityComponentSystem) -> Result<(), wgpu::SwapChainError> {
     let frame = graphics
         .swap_chain
         .get_current_frame()?

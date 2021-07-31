@@ -11,6 +11,7 @@ mod resources;
 mod ecs;
 mod texture;
 mod entity;
+mod graphics_tutorial;
 
 #[path= "components\\component.rs"]
 mod component;
@@ -35,7 +36,7 @@ use ecs::*;
 
 struct AppState {
     input: Input,
-    graphics: Graphics,
+    graphics: graphics_tutorial::Graphics,
     start_of_frame: Instant,
     time_elapsed: f64,
     delta_time: f64,
@@ -44,7 +45,7 @@ struct AppState {
 }
 
 impl AppState {
-    pub fn new(input: Input, graphics: Graphics, target_fps: Option<u16>) -> AppState {
+    pub fn new(input: Input, graphics: graphics_tutorial::Graphics, target_fps: Option<u16>) -> AppState {
         let fps = target_fps.unwrap_or(60);
         AppState {
             input: input,
@@ -108,7 +109,8 @@ fn main() {
 
     let mut event_pump = sdl_context.event_pump().unwrap();
 
-    let graphics = block_on(Graphics::new(&window));
+    // let graphics = block_on(Graphics::new(&window));
+    let graphics = block_on(graphics_tutorial::Graphics::new(&window));
     let mut app_state = AppState::new(Input::new(&event_pump), graphics, None);
     
     let mut ecs = EntityComponentSystem::new(10_000);
@@ -126,7 +128,7 @@ fn main() {
 
         control_system(&app_state.input, app_state.delta_time as f32, &ecs);
 
-        match render_system(&mut app_state.graphics, &ecs) {
+        match app_state.graphics.render() {
             Ok(_) => {}
             // Recreate the swap_chain if lost
             Err(wgpu::SwapChainError::Lost) => app_state.graphics.resize(app_state.graphics.size),
@@ -135,6 +137,16 @@ fn main() {
             // All other errors (Outdated, Timeout) should be resolved by the next frame
             Err(e) => eprintln!("{:?}", e),
         }
+
+        /*match render_system(&mut app_state.graphics, &ecs) {
+            Ok(_) => {}
+            // Recreate the swap_chain if lost
+            Err(wgpu::SwapChainError::Lost) => app_state.graphics.resize(app_state.graphics.size),
+            // The system is out of memory, we should probably quit
+            Err(wgpu::SwapChainError::OutOfMemory) => app_state.exit_app = true,
+            // All other errors (Outdated, Timeout) should be resolved by the next frame
+            Err(e) => eprintln!("{:?}", e),
+        }*/
 
         exit_frame(&mut app_state);
     }

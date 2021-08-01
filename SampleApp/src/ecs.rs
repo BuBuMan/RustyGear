@@ -3,6 +3,7 @@ use crate::entity::*;
 use crate::transform::Transform;
 use crate::camera::Camera;
 use crate::controller::Controller;
+use crate::mesh::Mesh;
 
 use anymap::AnyMap;
 use std::collections::HashSet;
@@ -23,6 +24,7 @@ impl EntityComponentSystem {
         components.insert(RefCell::new(ComponentSet::<Transform>::new(max_entities)));
         components.insert(RefCell::new(ComponentSet::<Controller>::new(max_entities)));
         components.insert(RefCell::new(ComponentSet::<Camera>::new(max_entities)));
+        components.insert(RefCell::new(ComponentSet::<Mesh>::new(max_entities)));
 
         Self {
             entity_allocator,
@@ -52,6 +54,10 @@ impl EntityComponentSystem {
                         }
                         "Controller" => {
                             let component : Controller = serde_json::from_str(&object["Controller"].to_string()).unwrap();
+                            self.add_component(&entity, component);
+                        }
+                        "Mesh" => {
+                            let component : Mesh = serde_json::from_str(&object["Mesh"].to_string()).unwrap();
                             self.add_component(&entity, component);
                         }
                         _ => {}

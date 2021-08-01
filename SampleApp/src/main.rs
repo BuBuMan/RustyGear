@@ -20,6 +20,8 @@ mod transform;
 mod controller;
 #[path= "components\\camera.rs"]
 mod camera;
+#[path= "components\\mesh.rs"]
+mod mesh;
 
 #[path= "systems\\render.rs"]
 mod render;
@@ -108,6 +110,7 @@ fn main() {
 
     let mut event_pump = sdl_context.event_pump().unwrap();
 
+    // let graphics = block_on(Graphics::new(&window));
     let graphics = block_on(Graphics::new(&window));
     let mut app_state = AppState::new(Input::new(&event_pump), graphics, None);
     
@@ -121,8 +124,6 @@ fn main() {
         if app_state.exit_app {
             break 'game_loop;
         }
-
-        // update_game(&app_state, &mut game_state);
 
         control_system(&app_state.input, app_state.delta_time as f32, &ecs);
 

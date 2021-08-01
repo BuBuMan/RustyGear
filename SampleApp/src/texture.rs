@@ -10,12 +10,13 @@ pub struct Texture {
 
 impl Texture {
     pub fn load_texture(
-        texture_path: &str,
+        texture_name: &str,
         device: &wgpu::Device,
         queue: &wgpu::Queue
     ) -> Result<Self> {
         let mut path = std::env::current_dir().unwrap();
-        path.push(texture_path);
+        path.push("src\\resources\\textures");
+        path.push(texture_name);
         let bytes = fs::read(path).unwrap();
         let image = image::load_from_memory(&bytes).unwrap();
         let rgba = image.as_rgba8().unwrap();

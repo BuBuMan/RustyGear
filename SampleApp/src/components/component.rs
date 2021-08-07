@@ -19,15 +19,22 @@ impl<T> ComponentSet<T> {
     }
 
     // Set value for some index. May overwrite past generation.
-    pub fn set(&mut self, gen_index: &EntityId, value: T) {
+    pub fn set(&mut self, gen_index: &EntityId, value: Option<T>) {
         debug_assert!(gen_index.index < self.entries.len());
 
-        let new_entry = ArrayEntry {
-            value: value,
-            generation: gen_index.generation,
-        };
-        
-        self.entries[gen_index.index] = Some(new_entry);
+        match value {
+            Some(v) => {
+                let new_entry = ArrayEntry {
+                    value: v,
+                    generation: gen_index.generation,
+                };
+                
+                self.entries[gen_index.index] = Some(new_entry);
+            },
+            None => {
+                self.entries[gen_index.index] = None; 
+            }
+        }      
     }
 
     // Gets a constant value for some generational index. The generation must match.

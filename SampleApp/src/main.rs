@@ -23,14 +23,15 @@ mod camera;
 #[path= "components\\mesh.rs"]
 mod mesh;
 
+#[path= "systems\\system.rs"]
+mod system;
 #[path= "systems\\render.rs"]
 mod render;
 #[path= "systems\\control.rs"]
 mod control;
 
-use render::render_system;
-use control::control_system;
 use graphics::Graphics;
+use system::SystemManager;
 use input::Input;
 use resources::Resources;
 use ecs::*;
@@ -114,9 +115,10 @@ fn main() {
     let graphics = block_on(Graphics::new(&window));
     let mut app_state = AppState::new(Input::new(&event_pump), graphics, None);
     
-    let mut ecs = EntityComponentSystem::new(10_000);
-    ecs.create_entity(&resources.prefabs["spaceship.json"]);
-    ecs.create_entity(&resources.prefabs["ortho_camera.json"]);
+    let mut ecs = EntityComponentSystem::new(10_000, resources);
+    let mut systems = SystemManager::new();
+    ecs.add_entity("spaceship.json".to_owned());
+    ecs.add_entity("ortho_camera.json".to_owned());
 
     'game_loop: loop {
         enter_frame(&mut event_pump, &mut app_state);
@@ -125,17 +127,7 @@ fn main() {
             break 'game_loop;
         }
 
-        control_system(&app_state.input, app_state.delta_time as f32, &ecs);
-
-        match render_system(&mut app_state.graphics, &ecs) {
-            Ok(_) => {}
-            // Recreate the swap_chain if lost
-            Err(wgpu::SwapChainError::Lost) => app_state.graphics.resize(app_state.graphics.size),
-            // The system is out of memory, we should probably quit
-            Err(wgpu::SwapChainError::OutOfMemory) => app_state.exit_app = true,
-            // All other errors (Outdated, Timeout) should be resolved by the next frame
-            Err(e) => eprintln!("{:?}", e),
-        }
+        systems.run(&mut ecs, &mut app_state.graphics, &app_state.input, app_state.delta_time as f32);
 
         exit_frame(&mut app_state);
     }
